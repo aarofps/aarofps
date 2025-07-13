@@ -15,7 +15,7 @@ My goal is to improve in coding and get involved in Game Development.
 * ⚡ Typed 110+ WPM in elementary school
 
 ### Connect With Me
-[LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/aaron-huynh-7839072b3/)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/aaron-huynh-7839072b3/)
 
 ### GitHub Stats
 ![Your GitHub stats](https://github-readme-stats.vercel.app/api?username=aarofps&show_icons=true&theme=dark)
