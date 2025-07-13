@@ -9,7 +9,7 @@ My goal is to improve in coding and get involved in Game Development.
 ### What I'm Up To
 - 🎯 Currently learning: [Java, Python, C++, C]
 - 🎮 Working on: Game Development projects / etc
-- 💪 Outside of code: Gym, TV shows, hanging out with friends
+- 💪 Outside of code: Gym, Video Games, Hanging out with friends
 ### Fun Facts:
 * ☕ I am a Matcha fiend
 * ⚡ Typed 110+ WPM in elementary school
