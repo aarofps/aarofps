@@ -15,7 +15,7 @@ My goal is to improve in coding and get involved in Game Development.
 * ⚡ Typed 110+ WPM in elementary school
 
 ### Connect With Me
-<a href="[YOUR_LINKEDIN_URL]([https://www.linkedin.com/in/aaron-huynh-7839072b3/](https://www.linkedin.com/in/aaron-huynh-7839072b3/))">
+<a href="[https://www.linkedin.com/in/aaron-huynh-7839072b3/]">
   <img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" />
 </a>
 
