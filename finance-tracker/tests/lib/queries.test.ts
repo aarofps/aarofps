@@ -101,3 +101,44 @@ describe("recategorize transfer flag", () => {
     expect(listTransactions(db, { categoryId: 2 }).rows[0].isTransfer).toBe(0);
   });
 });
+
+import { getBudgetPage, getSpendingPage, saveBudgets, prefillMonth } from "@/lib/queries";
+
+function spendDb() {
+  const db = getDb(":memory:");
+  db.insert(accounts).values({ id: "a", name: "Card", kind: "credit", source: "simplefin", balanceCents: 0, updatedAt: now }).run();
+  const rows: [string, string, number, number][] = [
+    ["2026-01-05", "j1", 4000, 2], ["2025-12-10", "d1", 6000, 2], ["2025-12-11", "d2", 1000, 1],
+    ["2025-11-10", "n1", 3000, 2], ["2025-10-10", "o1", 3000, 2],
+  ];
+  for (const [date, id, amountCents, categoryId] of rows) {
+    db.insert(transactions).values({ id, externalId: id, accountId: "a", date, amountCents, merchant: id, categoryId, source: "simplefin" }).run();
+  }
+  return db;
+}
+
+describe("spending and budget pages", () => {
+  it("compares this month with last month across a year boundary", () => {
+    const d = getSpendingPage(spendDb(), "2026-01");
+    expect(d.rows.find((r) => r.name === "Dining")).toMatchObject({ thisMonthCents: 4000, lastMonthCents: 6000 });
+    expect(d.rows.find((r) => r.name === "Groceries")).toMatchObject({ thisMonthCents: 0, lastMonthCents: 1000 });
+    expect(d.rows.some((r) => r.name === "Travel")).toBe(false);
+    expect(d.totalThisMonth).toBe(4000);
+  });
+  it("saves limits and shows status rows", () => {
+    const db = spendDb();
+    saveBudgets(db, "2026-01", [{ categoryId: 2, limitCents: 5000 }, { categoryId: 1, limitCents: 0 }]);
+    const b = getBudgetPage(db, "2026-01");
+    expect(b.rows.find((r) => r.categoryId === 2)).toMatchObject({ limitCents: 5000, spentCents: 4000, pct: 0.8 });
+    expect(b.rows.find((r) => r.categoryId === 1)).toBeUndefined();
+    expect(b.unbudgeted).toEqual([]);
+  });
+  it("prefills from the last 3 full months without overwriting existing limits", () => {
+    const db = spendDb();
+    saveBudgets(db, "2026-01", [{ categoryId: 1, limitCents: 77700 }]);
+    prefillMonth(db, "2026-01", "2026-01-13");
+    const b = getBudgetPage(db, "2026-01");
+    expect(b.rows.find((r) => r.categoryId === 2)?.limitCents).toBe(4000);
+    expect(b.rows.find((r) => r.categoryId === 1)?.limitCents).toBe(77700);
+  });
+});

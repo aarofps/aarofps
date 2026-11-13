@@ -2,7 +2,8 @@ import { and, count, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { accounts, alerts, balanceSnapshots, budgets, categories, categoryRules, connections, transactions } from "@/db/schema";
 import { normalizeMerchant, type Txn } from "./money/categorize";
-import { addDays, monthEnd, monthStart } from "./money/dates";
+import { addDays, addMonths, monthEnd, monthStart } from "./money/dates";
+import { budgetStatus, prefillBudgets } from "./money/budget";
 import { changeOverRange, netWorthOf, netWorthSeries, rangeStart, type Kind, type Range } from "./money/networth";
 import { spendingByCategory } from "./money/transfers";
 import { getSetting } from "./settings";
@@ -111,4 +112,53 @@ export function recategorize(db: DB, txnId: string, categoryId: number, applyToM
     }
   }
   return n;
+}
+
+export function getSpendingPage(db: DB, month: string) {
+  const { nameById } = categoryMaps(db);
+  const now = monthSpending(db, month), prev = monthSpending(db, addMonths(month, -1));
+  const ids = new Set([...now.keys(), ...prev.keys()]);
+  const rows = [...ids]
+    .map((id) => ({ categoryId: id, name: nameById[id] ?? "Other", thisMonthCents: now.get(id) ?? 0, lastMonthCents: prev.get(id) ?? 0 }))
+    .filter((r) => r.thisMonthCents !== 0 || r.lastMonthCents !== 0)
+    .sort((a, b) => b.thisMonthCents - a.thisMonthCents || b.lastMonthCents - a.lastMonthCents);
+  return {
+    rows,
+    totalThisMonth: rows.reduce((s, r) => s + r.thisMonthCents, 0),
+    totalLastMonth: rows.reduce((s, r) => s + r.lastMonthCents, 0),
+  };
+}
+
+export function getBudgetPage(db: DB, month: string) {
+  const { nameById } = categoryMaps(db);
+  const limits = new Map(db.select().from(budgets).where(eq(budgets.month, month)).all().map((b) => [b.categoryId, b.limitCents]));
+  const spent = monthSpending(db, month);
+  const rows = budgetStatus(limits, spent)
+    .map((r) => ({ ...r, name: nameById[r.categoryId] ?? "Other" }))
+    .sort((a, b) => b.pct - a.pct);
+  const unbudgeted = [...spent]
+    .filter(([id, c]) => !limits.has(id) && c > 0)
+    .map(([categoryId, spentCents]) => ({ categoryId, name: nameById[categoryId] ?? "Other", spentCents }))
+    .sort((a, b) => b.spentCents - a.spentCents);
+  return { rows, unbudgeted };
+}
+
+export function saveBudgets(db: DB, month: string, limits: { categoryId: number; limitCents: number }[]) {
+  for (const l of limits) {
+    if (l.limitCents <= 0) {
+      db.delete(budgets).where(and(eq(budgets.month, month), eq(budgets.categoryId, l.categoryId))).run();
+    } else {
+      db.insert(budgets).values({ month, ...l })
+        .onConflictDoUpdate({ target: [budgets.categoryId, budgets.month], set: { limitCents: l.limitCents } }).run();
+    }
+  }
+}
+
+export function prefillMonth(db: DB, month: string, today: string) {
+  const { idByName } = categoryMaps(db);
+  const anchor = month < today.slice(0, 7) ? monthStart(month) : today;
+  const all = db.select().from(transactions).all().map(toTxn);
+  for (const [categoryId, limitCents] of prefillBudgets(all, anchor, idByName.Income)) {
+    db.insert(budgets).values({ month, categoryId, limitCents }).onConflictDoNothing().run();
+  }
 }
