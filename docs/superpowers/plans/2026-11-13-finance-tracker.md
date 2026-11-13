@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A local, single-user Next.js app that syncs Aaron's accounts via Plaid and shows net worth, transactions, budget, spending, recurring charges, goals, credit score, in-app alerts and an AI chat.
+**Goal:** A local, single-user Next.js app that syncs Aaron's accounts via SimpleFIN Bridge and shows net worth, transactions, budget, spending, recurring charges, goals, credit score, in-app alerts and an AI chat.
 
-**Architecture:** One Next.js (App Router) app in `finance-tracker/`. Server-side code talks to SQLite (Drizzle) and Plaid; all money rules live as pure, unit-tested functions in `src/lib/money/`. UI pages are server components that read via `src/lib/queries.ts`; mutations go through route handlers / server actions.
+**Architecture:** One Next.js (App Router) app in `finance-tracker/`. Server-side code talks to SQLite (Drizzle) and the SimpleFIN Bridge HTTP API (plain `fetch`, no SDK); all money rules live as pure, unit-tested functions in `src/lib/money/`. UI pages are server components that read via `src/lib/queries.ts`; mutations go through route handlers / server actions.
 
-**Tech Stack:** Next.js 16, React, TypeScript, Tailwind CSS, Recharts, better-sqlite3 + drizzle-orm, plaid (Node SDK), react-plaid-link, @anthropic-ai/sdk, papaparse, @node-rs/argon2, jose (session JWT), Vitest.
+**Tech Stack:** Next.js 16, React, TypeScript, Tailwind CSS, Recharts, better-sqlite3 + drizzle-orm, @anthropic-ai/sdk, papaparse, @node-rs/argon2, jose (session JWT), Vitest.
 
 **Spec:** `docs/superpowers/specs/2026-11-13-finance-tracker-design.md`
 
@@ -15,9 +15,10 @@
 - All app code lives under `finance-tracker/`; repo-root `README.md` is not touched.
 - Server binds to `127.0.0.1` only: `"dev": "next dev -H 127.0.0.1"`, `"start": "next start -H 127.0.0.1"`.
 - **Money is integer cents** everywhere in DB and logic. Format only in UI.
-- **Sign convention (Plaid's):** transaction `amountCents > 0` = money out, `< 0` = money in. Credit account `balanceCents > 0` = owed.
-- Secrets only in `finance-tracker/.env.local` (gitignored): `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ENV` (`sandbox`|`production`), `ENCRYPTION_KEY` (64 hex chars), `SESSION_SECRET`, `ANTHROPIC_API_KEY` (optional). `.env.example` committed. `data/` gitignored.
-- Plaid access tokens stored encrypted (AES-256-GCM).
+- **App sign convention:** transaction `amountCents > 0` = money out, `< 0` = money in. Credit account `balanceCents > 0` = owed. SimpleFIN uses the opposite (amount `< 0` = money out; card balance `< 0` = owed), so the sync layer negates: `amountCents = -toCents(t.amount)`; credit `balanceCents = -toCents(a.balance)`.
+- Secrets only in `finance-tracker/.env.local` (gitignored): `ENCRYPTION_KEY` (64 hex chars), `SESSION_SECRET`, `ANTHROPIC_API_KEY` (optional). `.env.example` committed. `data/` gitignored.
+- SimpleFIN Access URL (contains credentials) stored encrypted (AES-256-GCM) in `settings` key `simplefin_access_url_enc`; never logged (redact `user:pass@`).
+- SimpleFIN limits: ~24 requests/day (exceeding can disable the token) and max 90-day window per request. Never make more than one sync request per app open; manual "Sync now" disabled for 60 minutes after a sync.
 - Chart ranges exactly: `1M`, `3M`, `1Y`, `ALL`.
 - Default alert thresholds: budget 90% and 100%; large transaction $250 (25000 cents); low checking $500 (50000 cents).
 - Auto-sync when app opened and last sync > 12 hours ago.
@@ -30,9 +31,9 @@
 ## Review Focus
 
 1. **Credit-card payment** appears as outflow in checking and inflow on the card → both flagged transfer, neither counted as spending. (Task 3 test `cardPaymentNotSpending`.)
-2. **Pending → posted** transaction: Plaid sync sends the posted one in `added` and the pending one in `removed` → exactly one row remains. (Task 6 test `pendingReplacedOnPost`.)
-3. **Empty database** (fresh install, nothing linked) → home page renders `$0.00`, no chart crash, shows "Connect an account" link. (Task 4 test `emptyNetWorthSeries`, Task 8 manual check.)
-4. **One item needs re-auth** (`ITEM_LOGIN_REQUIRED`) → that item marked `needs_reauth`, other items still sync, alert created. (Task 6 test `reauthDoesNotBlockOthers`.)
+2. **Pending → posted** transaction: SimpleFIN may give the posted txn a new id → after sync, local pending rows for that account inside the fetched window that are absent from the response are deleted, so exactly one row remains. (Task 6 test `pendingReplacedOnPost`.)
+3. **Empty database** (fresh install, nothing connected) → home page renders `$0.00`, no chart crash, shows "Connect an account" link. (Task 4 test `emptyNetWorthSeries`, Task 8 manual check.)
+4. **One bank connection broken** (SimpleFIN `errlist`/`errors` entry naming an institution, e.g. needs re-login on the Bridge site) → other accounts still update, a `reauth` alert names the institution with a link to the SimpleFIN Bridge site; a 403 on the whole request → `sync_error` alert "SimpleFIN token disabled or invalid" and no crash. (Task 6 tests `bankErrorDoesNotBlockOthers`, `forbiddenIsReported`.)
 5. **Messy CSV**: `$1,234.56`, `(45.00)` as negative, separate Debit/Credit columns, re-importing same file → parsed correctly, zero duplicates on re-import. (Task 7 tests.)
 
 ---
@@ -49,15 +50,15 @@ finance-tracker/
     lib/crypto.ts           encrypt/decrypt
     lib/auth.ts             password hash + session
     lib/money/cents.ts      formatCents, parseMoney
-    lib/money/categorize.ts categorize + Plaid category map
+    lib/money/categorize.ts categorize + keyword map
     lib/money/transfers.ts  detectTransfers, isSpending
     lib/money/networth.ts   netWorthSeries, changeOverRange, reconstructHistory
     lib/money/budget.ts     prefillBudgets, budgetStatus
     lib/money/recurring.ts  detectRecurring
     lib/alerts.ts           generateAlerts
     lib/csv.ts              parseCsv
-    lib/plaid/client.ts     Plaid API factory
-    lib/plaid/sync.ts       syncAll(db, plaid)
+    lib/simplefin/client.ts claim token, fetch accounts
+    lib/simplefin/sync.ts   syncAll(db, fetcher)
     lib/queries.ts          read helpers for pages
     lib/chat/tools.ts       Claude tool defs + executors
     middleware.ts           auth gate
@@ -79,23 +80,22 @@ finance-tracker/
 - Test: `tests/db/client.test.ts`
 
 **Interfaces:**
-- Produces: `getDb(path?: string): DB` (`":memory:"` allowed for tests; default `data/finance.db`); table exports `plaidItems, accounts, balanceSnapshots, transactions, categories, categoryRules, budgets, holdings, goals, creditScores, alerts, settings`.
+- Produces: `getDb(path?: string): DB` (`":memory:"` allowed for tests; default `data/finance.db`); table exports `connections, accounts, balanceSnapshots, transactions, categories, categoryRules, budgets, goals, creditScores, alerts, settings`.
 
 Schema (column → type):
-- `plaidItems`: id text pk (Plaid item_id), institutionName text, accessTokenEnc text, cursor text null, status text (`ok`|`needs_reauth`), createdAt text
-- `accounts`: id text pk, itemId text null, name, mask null, kind text (`cash`|`credit`|`investment`|`other`), source text (`plaid`|`manual`|`csv`), balanceCents int, hidden int default 0, updatedAt
+- `connections`: id text pk (SimpleFIN `org.domain` or `org.name`), institutionName text, status text (`ok`|`error`), lastError text null, updatedAt text
+- `accounts`: id text pk (SimpleFIN account id, or `manual:<uuid>`), connectionId text null, name, kind text (`cash`|`credit`|`investment`|`other`), kindUserSet int default 0, source text (`simplefin`|`manual`|`csv`), balanceCents int, hidden int default 0, updatedAt
 - `balanceSnapshots`: accountId, date text `YYYY-MM-DD`, balanceCents int, estimated int default 0; unique(accountId, date)
 - `transactions`: id text pk, accountId, date, amountCents int, merchant text, description text, categoryId int null, pending int, isTransfer int default 0, source text, externalId text unique
 - `categories`: id int pk, name unique
 - `categoryRules`: id, pattern text (lowercase merchant substring), categoryId
 - `budgets`: categoryId, month text `YYYY-MM`, limitCents; unique(categoryId, month)
-- `holdings`: accountId, securityName, ticker null, quantity real, valueCents
 - `goals`: id, name, targetCents, targetDate null, accountId null, earmarkedCents int default 0, manualCents int default 0
 - `creditScores`: id, date, score int, source text
 - `alerts`: id, type text, message text, createdAt, dismissed int default 0, dedupeKey text unique
 - `settings`: key text pk, value text
 
-- [ ] **Step 1:** Scaffold: `npx create-next-app@16 finance-tracker --ts --tailwind --app --src-dir --use-npm --no-eslint --import-alias "@/*"`; install `better-sqlite3 drizzle-orm plaid react-plaid-link @anthropic-ai/sdk papaparse @node-rs/argon2 jose recharts` and dev `drizzle-kit vitest @types/better-sqlite3 @types/papaparse`. Set dev/start scripts to `-H 127.0.0.1`, add `"test": "vitest run"`.
+- [ ] **Step 1:** Scaffold: `npx create-next-app@16 finance-tracker --ts --tailwind --app --src-dir --use-npm --no-eslint --import-alias "@/*"`; install `better-sqlite3 drizzle-orm @anthropic-ai/sdk papaparse @node-rs/argon2 jose recharts` and dev `drizzle-kit vitest @types/better-sqlite3 @types/papaparse`. Set dev/start scripts to `-H 127.0.0.1`, add `"test": "vitest run"`.
 - [ ] **Step 2: Failing test** `tests/db/client.test.ts`:
   - `getDb(":memory:")` creates all tables; `select from categories` returns the 15 default names in Global Constraints order.
   - calling seed twice does not duplicate categories.
@@ -130,18 +130,18 @@ Schema (column → type):
 - Produces:
   - `formatCents(c: number): string` → `"$1,234.56"`, negatives `"-$5.00"`
   - `parseMoney(s: string): number` → cents; handles `$`, commas, `(x)` negative, leading `-`
-  - `type Txn = { id: string; accountId: string; date: string; amountCents: number; merchant: string; plaidCategory?: string | null; categoryId?: number | null; isTransfer?: boolean; pending?: boolean }`
+  - `type Txn = { id: string; accountId: string; date: string; amountCents: number; merchant: string; categoryId?: number | null; isTransfer?: boolean; pending?: boolean }`
   - `type Rule = { pattern: string; categoryId: number }`
   - `normalizeMerchant(s: string): string` (lowercase, strip digits/`#`/store numbers, collapse spaces)
-  - `categorize(t: Txn, rules: Rule[], catIdByName: Record<string, number>): number` — rule (substring of normalized merchant) → `PLAID_MAP[t.plaidCategory]` → `Other`
-  - `PLAID_MAP: Record<string, string>` mapping Plaid `personal_finance_category.primary` (`FOOD_AND_DRINK`→Dining, `GENERAL_MERCHANDISE`→Shopping, `TRANSPORTATION`→Transport, `RENT_AND_UTILITIES`→Bills & Utilities, `ENTERTAINMENT`→Entertainment, `MEDICAL`→Health, `TRAVEL`→Travel, `INCOME`→Income, `TRANSFER_IN`/`TRANSFER_OUT`/`LOAN_PAYMENTS`→Transfer, `BANK_FEES`→Fees, `PERSONAL_CARE`→Health, `GENERAL_SERVICES`→Bills & Utilities, `HOME_IMPROVEMENT`→Shopping, `GOVERNMENT_AND_NON_PROFIT`→Other). Detailed `FOOD_AND_DRINK_GROCERIES` → Groceries overrides primary.
+  - `categorize(t: Txn, rules: Rule[], catIdByName: Record<string, number>): number` — rule (substring of normalized merchant) → first `KEYWORD_MAP` entry whose keyword is a substring of the normalized merchant → `Other`
+  - `KEYWORD_MAP: [string, string][]` (ordered; keyword → category name). Starter set: Transfer: `payment thank you`, `autopay`, `online payment`, `transfer`, `zelle`, `venmo`, `capital one mobile pmt`, `discover e-payment`, `bank of america online`; Income: `payroll`, `direct dep`, `salary`; Groceries: `trader joe`, `whole foods`, `safeway`, `kroger`, `costco`, `aldi`, `h mart`, `99 ranch`, `grocery`; Dining: `starbucks`, `chipotle`, `mcdonald`, `doordash`, `uber eats`, `grubhub`, `restaurant`, `cafe`, `boba`, `tea`; Transport: `uber`, `lyft`, `shell`, `chevron`, `exxon`, `arco`, `parking`, `transit`; Subscriptions: `netflix`, `spotify`, `hulu`, `disney`, `youtube`, `apple.com/bill`, `icloud`, `chatgpt`, `claude`, `xbox`, `playstation`, `steam`; Shopping: `amazon`, `target`, `walmart`, `best buy`; Health: `gym`, `fitness`, `cvs`, `walgreens`; Bills & Utilities: `verizon`, `t-mobile`, `at&t`, `comcast`, `xfinity`, `electric`, `water`; Fees: `fee`, `interest charge`. Order matters: `uber eats` before `uber`.
   - `detectTransfers(txns: Txn[], transferCategoryId: number): Set<string>` — ids that are transfers: category is Transfer, OR an opposite-sign equal-magnitude txn in a different account within 3 days (each txn pairs at most once).
   - `spendingByCategory(txns: Txn[], from: string, to: string, incomeCategoryId: number): Map<number, number>` — sums `amountCents` of txns that are not transfers, not pending, and not Income; refunds (negative) reduce their category. Pending txns are shown in lists but excluded from totals.
 
 - [ ] **Step 1: Failing tests:**
   - `parseMoney("$1,234.56") === 123456`, `parseMoney("(45.00)") === -4500`, `parseMoney("-3") === -300`; `formatCents(-500) === "-$5.00"`.
   - `normalizeMerchant("STARBUCKS #1234 SEATTLE")` contains `starbucks`, no digits.
-  - rule beats Plaid category; Plaid `FOOD_AND_DRINK_GROCERIES` → Groceries; unknown → Other.
+  - rule beats keyword; `"UBER EATS 123"` → Dining (not Transport); `"TRADER JOE'S #552"` → Groceries; `"CAPITAL ONE MOBILE PMT"` → Transfer; unknown → Other.
   - `cardPaymentNotSpending`: checking +50000 on 11-01 and card −50000 on 11-02 → both ids flagged; `spendingByCategory` excludes them.
   - two −2000/+2000 txns 5 days apart in different accounts → not flagged.
   - refund −1500 in Dining reduces Dining total by 1500.
@@ -197,34 +197,39 @@ Schema (column → type):
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run → PASS.
 - [ ] **Step 5:** Commit `feat(finance): in-app alert rules`.
 
-### Task 6: Plaid client and sync
+### Task 6: SimpleFIN client and sync
 
 **Files:**
-- Create: `src/lib/plaid/client.ts`, `src/lib/plaid/sync.ts`, `src/app/api/plaid/link-token/route.ts`, `src/app/api/plaid/exchange/route.ts`, `src/app/api/sync/route.ts`
-- Test: `tests/lib/plaid/sync.test.ts` (fake Plaid object, in-memory DB)
+- Create: `src/lib/simplefin/client.ts`, `src/lib/simplefin/sync.ts`, `src/app/api/simplefin/connect/route.ts`, `src/app/api/sync/route.ts`
+- Test: `tests/lib/simplefin/client.test.ts`, `tests/lib/simplefin/sync.test.ts` (fake fetcher, in-memory DB)
 
 **Interfaces:**
 - Consumes: `getDb`, `encrypt/decrypt`, Task 3–5 functions
 - Produces:
-  - `getPlaid(): PlaidApi` from env
-  - `type PlaidLike = Pick<PlaidApi, "transactionsSync" | "accountsBalanceGet" | "investmentsHoldingsGet">`
-  - `syncAll(db: DB, plaid: PlaidLike, opts: { keyHex: string; today: string }): Promise<{ synced: string[]; failed: { itemId: string; error: string }[] }>`
-  - `maybeAutoSync(db, plaid, opts): Promise<void>` — runs `syncAll` if settings `last_sync` older than 12h
-  - Routes: `POST /api/plaid/link-token` body `{ itemId?: string }` (update mode when itemId) → `{ linkToken }`; `POST /api/plaid/exchange` body `{ publicToken, institutionName }` → stores item, then runs sync for it, and on first link inserts `reconstructHistory` snapshots; `POST /api/sync` → result of `syncAll`.
+  - `claimSetupToken(token: string, fetchFn = fetch): Promise<string>` — base64-decode → must be `https://` claim URL → `POST` with empty body → response text must match `^https://.+:.+@` → Access URL. Errors: "not a SimpleFIN setup token", "already claimed — make a new one on the SimpleFIN site".
+  - `type SfTxn = { id: string; posted: number; amount: string; description?: string; payee?: string; pending?: boolean; transacted_at?: number }`
+  - `type SfAccount = { id: string; name: string; currency: string; balance: string; "balance-date": number; org?: { domain?: string; name?: string }; transactions?: SfTxn[] }`
+  - `type SfResponse = { accounts: SfAccount[]; errors: string[] }` (merge `errors` strings and `errlist[].msg` into `errors`)
+  - `fetchAccounts(accessUrl: string, startUnix: number, fetchFn = fetch): Promise<SfResponse>` — strips `user:pass` from URL into `Authorization: Basic`, `GET {base}/accounts?start-date=<unix>&pending=1`; 403 → throws `SimplefinForbidden`.
+  - `guessKind(name: string, balanceCents: number): Kind` — name has `credit|card|visa|mastercard|discover|amex|quicksilver|savor|venture|customized cash` → credit; `ira|roth|brokerage|401k|invest|schwab one` → investment; else cash.
+  - `toCents(s: string): number` (string decimal → integer cents, no float drift: split on `.`)
+  - `syncAll(db: DB, fetcher: (startUnix: number) => Promise<SfResponse>, opts: { today: string }): Promise<{ accounts: number; added: number; errors: string[] }>`
+  - `maybeAutoSync(db, opts): Promise<void>` — runs if Access URL saved and settings `last_sync` older than 12h.
+  - Routes: `POST /api/simplefin/connect` `{ setupToken }` → claims, stores encrypted Access URL, runs first sync with backfill; `POST /api/sync` → `syncAll` result, returns 429 if last sync < 60 min ago.
 
-Per item: loop `transactionsSync` until `has_more` false applying `added` (upsert by externalId = Plaid transaction_id), `modified` (update), `removed` (delete); save cursor only after loop completes. Then balances (map Plaid type `depository`→cash, `credit`→credit, `investment`→investment, else other) and today's snapshot upsert; holdings for investment accounts (ignore `PRODUCTS_NOT_SUPPORTED`). After all items: categorize uncategorized, run `detectTransfers` over last 90 days, `detectRecurring`, `generateAlerts` (insert with `INSERT OR IGNORE` on dedupeKey), set `last_sync`. Plaid error code `ITEM_LOGIN_REQUIRED` → item status `needs_reauth`, continue.
+Sync algorithm: window start = `last_sync − 7 days` (or 90 days back on first sync). First sync backfills: up to 3 extra requests for the previous 90-day windows (≈1 year total), stopping early when a window returns zero transactions; total requests per sync ≤ 4. For each account: upsert `connections` from `org`; upsert account (keep `kind` if `kindUserSet`, else `guessKind`); balance with sign rule (credit negated); upsert today's snapshot (`date` from `balance-date`). Transactions: `externalId = "sf:" + id`, `date` = UTC date of `transacted_at ?? posted` (`posted === 0` → today, pending), `amountCents = -toCents(amount)`, `merchant = payee ?? description`, upsert by externalId. Then delete local pending rows for that account dated inside the fetched window whose externalId wasn't in the response. Each `errors` entry → `reauth` alert (message = the error text + "Fix it on the SimpleFIN Bridge site"), connection status `error` when the text names its institution. After all: categorize uncategorized, `detectTransfers` over last 90 days, `detectRecurring`, `generateAlerts` (`INSERT OR IGNORE` on dedupeKey), first-sync `reconstructHistory` for cash/credit accounts, set `last_sync`.
 
-Link products: `transactions` (required), `investments` as `optional_products`. Country `US`. `days_requested: 730`.
-
-- [ ] **Step 1: Failing tests** with fake Plaid:
-  - `pendingReplacedOnPost`: page 1 adds pending P; second sync adds posted T and removes P → one transaction, T.
-  - cursor saved only after `has_more:false`.
-  - `reauthDoesNotBlockOthers`: item A throws `{ response: { data: { error_code: "ITEM_LOGIN_REQUIRED" } } }`, item B ok → B's transactions saved, A status `needs_reauth`, `reauth` alert exists.
-  - balances write one snapshot per account per day (second sync same day updates, not duplicates).
-  - access token passed to Plaid is the decrypted value.
+- [ ] **Step 1: Failing tests:**
+  - `claimSetupToken`: base64 of `https://bridge.example/claim/abc` → POSTs there, returns access URL; non-https decode → throws; response without credentials → throws.
+  - `fetchAccounts`: sends `Authorization: Basic base64(user:pass)` and URL without credentials; includes `start-date` and `pending=1`; 403 → `SimplefinForbidden`.
+  - `toCents("-12.5") === -1250`, `toCents("1234.56") === 123456`, `toCents("0.1") === 10`.
+  - sign: SimpleFIN `amount "-45.00"` on checking → stored `amountCents 4500`; credit account balance `"-320.10"` → `balanceCents 32010`.
+  - `pendingReplacedOnPost`: sync 1 returns pending P (id p1); sync 2 returns posted T (id t1), no p1 → one row, T.
+  - `bankErrorDoesNotBlockOthers`: response with 2 accounts and `errors: ["Connection to Discover may need attention"]` → both accounts updated, one `reauth` alert.
+  - `forbiddenIsReported`: fetcher throws `SimplefinForbidden` → `sync_error` alert, `last_sync` unchanged, no throw.
+  - same-day second sync updates snapshot, doesn't duplicate; user-set kind survives sync.
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run → PASS.
-- [ ] **Step 5:** Manual sandbox check (if Plaid sandbox keys present): link "First Platypus Bank" with `user_good`/`pass_good`, sync, rows appear.
-- [ ] **Step 6:** Commit `feat(finance): plaid linking and sync`.
+- [ ] **Step 5:** Commit `feat(finance): simplefin connect and sync`.
 
 ### Task 7: CSV import and manual accounts
 
@@ -233,7 +238,7 @@ Link products: `transactions` (required), `investments` as `optional_products`. 
 - Test: `tests/lib/csv.test.ts`
 
 **Interfaces:**
-- Produces: `type CsvMapping = { date: string; description: string; amount?: string; debit?: string; credit?: string; invert?: boolean }`; `parseCsv(text: string, m: CsvMapping): { date: string; description: string; amountCents: number }[]` (dates accepted `MM/DD/YYYY`, `YYYY-MM-DD`, `M/D/YY`; output Plaid sign: debit positive; `invert` flips single amount column); `csvExternalId(accountId, row): string` = `csv:` + sha1(accountId|date|amountCents|description). `POST /api/import` multipart `{ file, accountId, mapping }` → `{ inserted, skipped }`. `POST /api/accounts/manual` `{ name, kind, balanceCents }` creates/updates manual account and today's snapshot.
+- Produces: `type CsvMapping = { date: string; description: string; amount?: string; debit?: string; credit?: string; invert?: boolean }`; `parseCsv(text: string, m: CsvMapping): { date: string; description: string; amountCents: number }[]` (dates accepted `MM/DD/YYYY`, `YYYY-MM-DD`, `M/D/YY`; output app sign: debit positive; `invert` flips single amount column); `csvExternalId(accountId, row): string` = `csv:` + sha1(accountId|date|amountCents|description). `POST /api/import` multipart `{ file, accountId, mapping }` → `{ inserted, skipped }`. `POST /api/accounts/manual` `{ name, kind, balanceCents }` creates/updates manual account and today's snapshot.
 
 - [ ] **Step 1: Failing tests:** amount column with `$1,234.56` and `(45.00)`; Debit/Credit columns (debit 20.00 → 2000, credit 100.00 → −10000); `invert` flips; `M/D/YY` → `20YY-MM-DD`; blank rows skipped; same row → same `csvExternalId`.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement (papaparse header mode). Import route inserts with `INSERT OR IGNORE` on externalId so re-import skips. **Step 4:** PASS.
@@ -247,7 +252,7 @@ Link products: `transactions` (required), `investments` as `optional_products`. 
 
 **Interfaces:**
 - Consumes: Task 4 functions, `maybeAutoSync`
-- Produces: `getHomeData(db, today, range): { netWorthCents; change: {deltaCents; pct}; series; groups: { cash: AcctRow[]; investment: AcctRow[]; credit: AcctRow[]; other: AcctRow[] }; budget: { spentCents; limitCents }; alerts: AlertRow[]; reauthItems: {id; institutionName}[]; lastSync: string | null }`. "This month" change on headline = change from first day of current month.
+- Produces: `getHomeData(db, today, range): { netWorthCents; change: {deltaCents; pct}; series; groups: { cash: AcctRow[]; investment: AcctRow[]; credit: AcctRow[]; other: AcctRow[] }; budget: { spentCents; limitCents }; alerts: AlertRow[]; reauthItems: {id; institutionName; lastError}[]; lastSync: string | null }`. "This month" change on headline = change from first day of current month.
 
 Layout: left nav (Home, Transactions, Budget, Spending, Recurring, Goals, Credit, Chat, Settings); dark-mode friendly Tailwind. Home matches spec sketch: headline net worth + ▲/▼ month change (green/red), range tabs `1M 3M 1Y ALL` via `?range=`, chart (estimated segment dashed or lighter), account groups with totals, budget summary line, alerts with dismiss, reconnect banner, "Sync now" with last-synced time. Home server component calls `maybeAutoSync` before reading.
 
@@ -299,14 +304,14 @@ Layout: left nav (Home, Transactions, Budget, Spending, Recurring, Goals, Credit
 ### Task 12: Settings screen
 
 **Files:**
-- Create: `src/app/(app)/settings/page.tsx`, `src/components/PlaidLinkButton.tsx` (client, `react-plaid-link`), `src/components/CsvImport.tsx`, `src/app/api/settings/route.ts`
+- Create: `src/app/(app)/settings/page.tsx`, `src/components/SimplefinConnect.tsx` (client), `src/components/CsvImport.tsx`, `src/app/api/settings/route.ts`
 
 **Interfaces:**
-- Consumes: Task 6 link/exchange routes, Task 7 import/manual routes, Task 2 `hashPassword`
+- Consumes: Task 6 connect/sync routes, Task 7 import/manual routes, Task 2 `hashPassword`
 - Produces: `PUT /api/settings` `{ largeTxnCents?, lowCashCents?, newPassword?, currentPassword? }`.
 
-- [ ] **Step 1:** Sections: Linked institutions (status, Reconnect → link token in update mode, Connect new); Accounts (hide toggle, kind); Manual account form; CSV import (file → preview first 5 rows → pick columns → account → import, shows inserted/skipped); Alert thresholds; Change password (requires current). Missing Plaid env → show setup instructions instead of button.
-- [ ] **Step 2:** Manual check in sandbox: connect, reconnect, CSV import of a sample file in `tests/fixtures/sample.csv` twice → second shows 0 inserted.
+- [ ] **Step 1:** Sections: SimpleFIN (not connected → steps: sign up at the SimpleFIN Bridge site, link banks there, create a setup token, paste here; connected → institutions with status and last error, \"Replace token\", \"Disconnect\" which deletes the stored Access URL); Accounts (hide toggle, kind select — sets `kindUserSet`); Manual account form; CSV import (file → preview first 5 rows → pick columns → account → import, shows inserted/skipped); Alert thresholds; Change password (requires current).
+- [ ] **Step 2:** Manual check: paste a bad token → readable error; CSV import of a sample file in `tests/fixtures/sample.csv` twice → second shows 0 inserted.
 - [ ] **Step 3:** Commit `feat(finance): settings screen`.
 
 ### Task 13: AI chat
@@ -328,7 +333,7 @@ Layout: left nav (Home, Transactions, Budget, Spending, Recurring, Goals, Credit
 **Files:**
 - Create: `finance-tracker/README.md`
 
-- [ ] **Step 1:** README: what it is; prerequisites (Node 22); `npm install`; copy `.env.example` → `.env.local`; generate `ENCRYPTION_KEY`/`SESSION_SECRET` (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`); Plaid Trial signup steps, sandbox first then production; Schwab access request note; optional Anthropic key; `npm run dev`; backup = copy `data/finance.db`.
+- [ ] **Step 1:** README: what it is; prerequisites (Node 22); `npm install`; copy `.env.example` → `.env.local`; generate `ENCRYPTION_KEY`/`SESSION_SECRET` (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`); SimpleFIN Bridge signup (≈$1.50/mo), link banks, create setup token, paste in Settings; note ~24 requests/day limit and CSV fallback for unsupported banks; optional Anthropic key; `npm run dev`; backup = copy `data/finance.db`.
 - [ ] **Step 2:** Run `npm test` → all pass; `npm run build` → success.
-- [ ] **Step 3:** Seed script `npm run seed:demo` (`scripts/seed-demo.ts`) filling fake accounts/transactions so the app can be viewed without Plaid; Playwright screenshots of each page — no console errors.
+- [ ] **Step 3:** Seed script `npm run seed:demo` (`scripts/seed-demo.ts`) filling fake accounts/transactions so the app can be viewed without SimpleFIN; Playwright screenshots of each page — no console errors.
 - [ ] **Step 4:** Commit `docs(finance): setup guide and demo seed`; push branch.
