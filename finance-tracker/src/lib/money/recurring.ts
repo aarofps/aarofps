@@ -19,10 +19,14 @@ function next(date: string, c: Cadence): string {
   return addMonths(date.slice(0, 7), months) + date.slice(7);
 }
 
-export function detectRecurring(txns: Txn[], ignored: Set<string> = new Set()): Recurring[] {
+export type RecurringOpts = { excludeCategoryIds?: number[]; today?: string };
+
+export function detectRecurring(txns: Txn[], ignored: Set<string> = new Set(), opts: RecurringOpts = {}): Recurring[] {
+  const exclude = new Set(opts.excludeCategoryIds ?? []);
   const groups = new Map<string, Txn[]>();
   for (const t of txns) {
     if (t.amountCents <= 0 || t.isTransfer || t.pending) continue;
+    if (t.categoryId != null && exclude.has(t.categoryId)) continue;
     const key = normalizeMerchant(t.merchant);
     if (!key || ignored.has(key)) continue;
     groups.set(key, [...(groups.get(key) ?? []), t]);
@@ -37,9 +41,12 @@ export function detectRecurring(txns: Txn[], ignored: Set<string> = new Set()): 
     const match = CADENCES.find((c) => gaps.every((g) => Math.abs(g - c.days) <= c.tol));
     if (!match) continue;
     const last = list[list.length - 1];
+    const nextDate = next(last.date, match.cadence);
+    // Stopped: more than half a cycle past when the next charge was due.
+    if (opts.today && daysBetween(nextDate, opts.today) > match.days / 2 + match.tol) continue;
     out.push({
       key, merchant: last.merchant, avgCents: Math.round(avg), cadence: match.cadence,
-      lastDate: last.date, nextDate: next(last.date, match.cadence), accountId: last.accountId,
+      lastDate: last.date, nextDate, accountId: last.accountId,
     });
   }
   return out.sort((a, b) => b.avgCents - a.avgCents);

@@ -6,7 +6,8 @@ import { addDays, addMonths, monthEnd, monthStart } from "./money/dates";
 import { budgetStatus, prefillBudgets } from "./money/budget";
 import { changeOverRange, netWorthOf, netWorthSeries, rangeStart, type Kind, type Range } from "./money/networth";
 import { spendingByCategory } from "./money/transfers";
-import { getSetting } from "./settings";
+import { getSetting, setSetting } from "./settings";
+import { detectRecurring } from "./money/recurring";
 import { ACCESS_URL_KEY } from "./simplefin/sync";
 
 export type AcctRow = typeof accounts.$inferSelect;
@@ -161,4 +162,21 @@ export function prefillMonth(db: DB, month: string, today: string) {
   for (const [categoryId, limitCents] of prefillBudgets(all, anchor, idByName.Income)) {
     db.insert(budgets).values({ month, categoryId, limitCents }).onConflictDoNothing().run();
   }
+}
+
+const PER_MONTH = { weekly: 52 / 12, monthly: 1, yearly: 1 / 12 } as const;
+
+export function getRecurring(db: DB, today: string) {
+  const ignored = new Set<string>(JSON.parse(getSetting(db, "recurring_ignored") ?? "[]"));
+  const { idByName } = categoryMaps(db);
+  const items = detectRecurring(db.select().from(transactions).all().map(toTxn), ignored,
+    { excludeCategoryIds: [idByName.Transfer, idByName.Income], today });
+  const monthlyCents = items.reduce((s, r) => s + Math.round(r.avgCents * PER_MONTH[r.cadence]), 0);
+  return { items, monthlyCents };
+}
+
+export function ignoreRecurring(db: DB, key: string) {
+  const ignored = new Set<string>(JSON.parse(getSetting(db, "recurring_ignored") ?? "[]"));
+  ignored.add(key);
+  setSetting(db, "recurring_ignored", JSON.stringify([...ignored]));
 }

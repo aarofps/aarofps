@@ -25,3 +25,15 @@ describe("detectRecurring", () => {
     expect(detectRecurring([t("2026-08-05", 1549), t("2026-09-05", 1549), t("2026-10-05", 1549)], new Set(["netflix.com"]))).toEqual([]);
   });
 });
+
+describe("detectRecurring filters", () => {
+  it("skips excluded categories like Transfer", () => {
+    const pay = (d: string) => ({ ...t(d, 60000, "CAPITAL ONE MOBILE PMT"), categoryId: 13 });
+    expect(detectRecurring([pay("2026-08-25"), pay("2026-09-25"), pay("2026-10-25")], new Set(), { excludeCategoryIds: [13] })).toEqual([]);
+  });
+  it("drops charges that stopped (well past their next date)", () => {
+    const old = [t("2026-03-05", 1549), t("2026-04-05", 1549), t("2026-05-05", 1549)];
+    expect(detectRecurring(old, new Set(), { today: "2026-11-13" })).toEqual([]);
+    expect(detectRecurring(old, new Set(), { today: "2026-06-12" })).toHaveLength(1);
+  });
+});

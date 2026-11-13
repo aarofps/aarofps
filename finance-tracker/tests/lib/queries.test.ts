@@ -142,3 +142,21 @@ describe("spending and budget pages", () => {
     expect(b.rows.find((r) => r.categoryId === 1)?.limitCents).toBe(77700);
   });
 });
+
+import { getRecurring, ignoreRecurring } from "@/lib/queries";
+
+describe("recurring page", () => {
+  it("lists subscriptions with a monthly total and hides ignored ones", () => {
+    const db = getDb(":memory:");
+    db.insert(accounts).values({ id: "a", name: "Card", kind: "credit", source: "simplefin", balanceCents: 0, updatedAt: now }).run();
+    const add = (id: string, date: string, merchant: string, amountCents: number) =>
+      db.insert(transactions).values({ id, externalId: id, accountId: "a", date, merchant, amountCents, categoryId: 5, source: "simplefin" }).run();
+    ["2026-08-05", "2026-09-05", "2026-10-05"].forEach((d, i) => add("n" + i, d, "NETFLIX.COM", 1549));
+    ["2026-10-01", "2026-10-08", "2026-10-15"].forEach((d, i) => add("g" + i, d, "GYM", 1000));
+    const r = getRecurring(db, "2026-10-16");
+    expect(r.items.map((x) => x.key).sort()).toEqual(["gym", "netflix.com"]);
+    expect(r.monthlyCents).toBe(1549 + Math.round((1000 * 52) / 12));
+    ignoreRecurring(db, "gym");
+    expect(getRecurring(db, "2026-10-16").items.map((x) => x.key)).toEqual(["netflix.com"]);
+  });
+});

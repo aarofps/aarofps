@@ -104,7 +104,7 @@ export function postProcess(db: DB, opts: { today: string; now: Date; newIds: st
 
   const all = db.select().from(transactions).all().map(toTxn);
   const ignored = new Set<string>(JSON.parse(getSetting(db, "recurring_ignored") ?? "[]"));
-  const recurring = detectRecurring(all, ignored);
+  const recurring = detectRecurring(all, ignored, { excludeCategoryIds: [catId.Transfer, catId.Income], today: opts.today });
   const known = new Set<string>(JSON.parse(getSetting(db, "recurring_known") ?? "[]"));
   const newRecurring = opts.quiet ? [] : recurring.filter((r) => !known.has(r.key));
   setSetting(db, "recurring_known", JSON.stringify([...new Set([...known, ...recurring.map((r) => r.key)])]));
