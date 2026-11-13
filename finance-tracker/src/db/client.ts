@@ -25,7 +25,7 @@ export function seedCategories(db: DB): void {
 /** Open (and migrate + seed) a database. ":memory:" gives a fresh DB each call. */
 export function getDb(file?: string): DB {
   if (!file && shared) return shared;
-  const target = file ?? path.join(process.cwd(), "data", "finance.db");
+  const target = file ?? process.env.FINANCE_DB ?? path.join(process.cwd(), "data", "finance.db");
   if (target !== ":memory:") fs.mkdirSync(path.dirname(target), { recursive: true });
   const sqlite = new Database(target);
   sqlite.pragma("journal_mode = WAL");

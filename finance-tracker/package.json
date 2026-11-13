@@ -8,7 +8,9 @@
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "demo": "tsx scripts/seed-demo.ts && FINANCE_DB=data/demo.db next dev -H 127.0.0.1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
