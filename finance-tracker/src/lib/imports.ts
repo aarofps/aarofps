@@ -5,6 +5,7 @@ import { accounts, balanceSnapshots, transactions } from "@/db/schema";
 import type { Kind } from "./money/networth";
 import { csvExternalId, type CsvRow } from "./csv";
 import { postProcess } from "./simplefin/sync";
+import { localDate } from "./money/dates";
 
 export function importCsvRows(db: DB, accountId: string, rows: CsvRow[], now = new Date()): { inserted: number; skipped: number } {
   if (!db.select().from(accounts).where(eq(accounts.id, accountId)).get()) throw new Error("Pick an account to import into.");
@@ -22,7 +23,7 @@ export function importCsvRows(db: DB, accountId: string, rows: CsvRow[], now = n
     }).onConflictDoNothing().run();
     if (res.changes) newIds.push(externalId); else skipped++;
   }
-  postProcess(db, { today: now.toISOString().slice(0, 10), now, newIds, quiet: true });
+  postProcess(db, { today: localDate(now), now, newIds, quiet: true });
   return { inserted: newIds.length, skipped };
 }
 
@@ -33,7 +34,7 @@ export function upsertManualAccount(
   const nowIso = now.toISOString();
   db.insert(accounts).values({ id, name: a.name, kind: a.kind, kindUserSet: 1, source: "manual", balanceCents: a.balanceCents, updatedAt: nowIso })
     .onConflictDoUpdate({ target: accounts.id, set: { name: a.name, kind: a.kind, balanceCents: a.balanceCents, updatedAt: nowIso } }).run();
-  db.insert(balanceSnapshots).values({ accountId: id, date: nowIso.slice(0, 10), balanceCents: a.balanceCents })
+  db.insert(balanceSnapshots).values({ accountId: id, date: localDate(now), balanceCents: a.balanceCents })
     .onConflictDoUpdate({ target: [balanceSnapshots.accountId, balanceSnapshots.date], set: { balanceCents: a.balanceCents, estimated: 0 } }).run();
   return id;
 }

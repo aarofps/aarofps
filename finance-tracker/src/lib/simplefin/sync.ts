@@ -8,7 +8,7 @@ import { detectTransfers, spendingByCategory } from "../money/transfers";
 import { detectRecurring } from "../money/recurring";
 import { budgetStatus } from "../money/budget";
 import { reconstructHistory } from "../money/networth";
-import { addDays, dateToUnix, monthEnd, monthStart, unixToDate } from "../money/dates";
+import { addDays, dateToUnix, localDate, monthEnd, monthStart, unixToDate } from "../money/dates";
 import { DEFAULT_THRESHOLDS, generateAlerts, type NewAlert } from "../alerts";
 import { getSetting, setSetting } from "../settings";
 import { decrypt } from "../crypto";
@@ -130,12 +130,12 @@ export function postProcess(db: DB, opts: { today: string; now: Date; newIds: st
 export async function syncAll(db: DB, fetcher: Fetcher, opts: { now?: Date } = {}): Promise<SyncResult> {
   const now = opts.now ?? new Date();
   const nowIso = now.toISOString();
-  const today = nowIso.slice(0, 10);
+  const today = localDate(now);
   setSetting(db, "last_sync_attempt", nowIso);
   const last = getSetting(db, "last_sync");
   const first = !last;
   const floor = addDays(today, -WINDOW_DAYS);
-  let windowStart = first ? floor : addDays(last!.slice(0, 10), -7);
+  let windowStart = first ? floor : addDays(localDate(new Date(last!)), -7);
   if (windowStart < floor) windowStart = floor;
 
   let main: SfResponse;

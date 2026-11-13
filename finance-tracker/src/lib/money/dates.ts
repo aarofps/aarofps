@@ -6,8 +6,13 @@ const fromMs = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 export const addDays = (d: string, n: number) => fromMs(toMs(d) + n * DAY);
 export const daysBetween = (a: string, b: string) => Math.round((toMs(b) - toMs(a)) / DAY);
 export const monthKey = (d: string) => d.slice(0, 7);
-export const todayUtc = () => fromMs(Date.now());
-export const unixToDate = (s: number) => fromMs(s * 1000);
+/** Calendar date on this computer's clock (the user's local day). */
+export function localDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/** Today's local date. (Name kept for existing callers; it is local, not UTC.) */
+export const todayUtc = () => localDate(new Date());
+export const unixToDate = (s: number) => localDate(new Date(s * 1000));
 export const dateToUnix = (d: string) => Math.floor(toMs(d) / 1000);
 
 export function addMonths(month: string, n: number): string {
