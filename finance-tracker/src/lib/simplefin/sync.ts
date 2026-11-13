@@ -116,7 +116,7 @@ export function postProcess(db: DB, opts: { today: string; now: Date; newIds: st
   const newTxns = opts.newIds.length
     ? db.select().from(transactions).where(inArray(transactions.id, opts.newIds)).all().map(toTxn).filter((t) => t.date >= recentCutoff)
     : [];
-  const thresholds = JSON.parse(getSetting(db, "alert_thresholds") ?? "null") ?? DEFAULT_THRESHOLDS;
+  const thresholds = { ...DEFAULT_THRESHOLDS, ...JSON.parse(getSetting(db, "alert_thresholds") ?? "{}") };
 
   insertAlerts(db, generateAlerts({
     budget: budgetStatus(limits, spent),
