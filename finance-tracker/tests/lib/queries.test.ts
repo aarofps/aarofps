@@ -43,3 +43,61 @@ describe("getHomeData", () => {
     expect(d.alerts.map((a) => a.message)).toEqual(["hi"]);
   });
 });
+
+import { listTransactions, recategorize } from "@/lib/queries";
+import { categoryRules } from "@/db/schema";
+
+function txnDb() {
+  const db = getDb(":memory:");
+  db.insert(accounts).values([
+    { id: "a", name: "Card", kind: "credit", source: "simplefin", balanceCents: 0, updatedAt: now },
+    { id: "b", name: "Checking", kind: "cash", source: "simplefin", balanceCents: 0, updatedAt: now },
+  ]).run();
+  const rows = [
+    ["1", "a", "2026-11-01", "CHIPOTLE 22"], ["2", "a", "2026-11-03", "CHIPOTLE 98"], ["3", "b", "2026-11-05", "chipotle online"],
+    ["4", "b", "2026-10-20", "TARGET"], ["5", "a", "2026-11-06", "Starbucks"],
+  ];
+  for (const [id, accountId, date, merchant] of rows) {
+    db.insert(transactions).values({ id, externalId: id, accountId, date, merchant, amountCents: 1000, categoryId: 15, source: "simplefin" }).run();
+  }
+  return db;
+}
+
+describe("listTransactions", () => {
+  it("filters by text, account and date, newest first", () => {
+    const db = txnDb();
+    expect(listTransactions(db, { q: "chipotle" }).rows.map((r) => r.id)).toEqual(["3", "2", "1"]);
+    expect(listTransactions(db, { accountId: "b" }).total).toBe(2);
+    expect(listTransactions(db, { from: "2026-11-02", to: "2026-11-05" }).rows.map((r) => r.id)).toEqual(["3", "2"]);
+    expect(listTransactions(db, { categoryId: 2 }).total).toBe(0);
+  });
+  it("pages 50 at a time", () => {
+    const db = txnDb();
+    expect(listTransactions(db, { page: 2 }).rows).toEqual([]);
+  });
+});
+
+describe("recategorize", () => {
+  it("can apply to every transaction from the same merchant and saves a rule", () => {
+    const db = txnDb();
+    recategorize(db, "1", 2, true);
+    expect(db.select().from(categoryRules).all()).toMatchObject([{ pattern: "chipotle", categoryId: 2 }]);
+    expect(listTransactions(db, { categoryId: 2 }).rows.map((r) => r.id).sort()).toEqual(["1", "2", "3"]);
+  });
+  it("changes just one when not applying to the merchant", () => {
+    const db = txnDb();
+    recategorize(db, "5", 2, false);
+    expect(listTransactions(db, { categoryId: 2 }).total).toBe(1);
+    expect(db.select().from(categoryRules).all()).toEqual([]);
+  });
+});
+
+describe("recategorize transfer flag", () => {
+  it("marks a transaction as a transfer when moved to Transfer, and unmarks when moved out", () => {
+    const db = txnDb();
+    recategorize(db, "5", 13, false);
+    expect(listTransactions(db, { categoryId: 13 }).rows[0].isTransfer).toBe(1);
+    recategorize(db, "5", 2, false);
+    expect(listTransactions(db, { categoryId: 2 }).rows[0].isTransfer).toBe(0);
+  });
+});

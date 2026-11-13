@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
-import { accounts, alerts, balanceSnapshots, budgets, categories, connections, transactions } from "@/db/schema";
-import type { Txn } from "./money/categorize";
+import { accounts, alerts, balanceSnapshots, budgets, categories, categoryRules, connections, transactions } from "@/db/schema";
+import { normalizeMerchant, type Txn } from "./money/categorize";
 import { addDays, monthEnd, monthStart } from "./money/dates";
 import { changeOverRange, netWorthOf, netWorthSeries, rangeStart, type Kind, type Range } from "./money/networth";
 import { spendingByCategory } from "./money/transfers";
@@ -69,4 +69,46 @@ export function getHomeData(db: DB, today: string, range: Range) {
 
 export function dismissAlert(db: DB, id: number) {
   db.update(alerts).set({ dismissed: 1 }).where(and(eq(alerts.id, id))).run();
+}
+
+export const PAGE_SIZE = 50;
+export type TxnFilter = { q?: string; accountId?: string; categoryId?: number; from?: string; to?: string; page?: number };
+
+export function listTransactions(db: DB, f: TxnFilter): { rows: TxnRow[]; total: number } {
+  const conds = [];
+  if (f.q?.trim()) {
+    const like = `%${f.q.trim().toLowerCase()}%`;
+    conds.push(or(sql`lower(${transactions.merchant}) like ${like}`, sql`lower(${transactions.description}) like ${like}`));
+  }
+  if (f.accountId) conds.push(eq(transactions.accountId, f.accountId));
+  if (f.categoryId) conds.push(eq(transactions.categoryId, f.categoryId));
+  if (f.from) conds.push(gte(transactions.date, f.from));
+  if (f.to) conds.push(lte(transactions.date, f.to));
+  const where = conds.length ? and(...conds) : undefined;
+  const total = db.select({ n: count() }).from(transactions).where(where).get()?.n ?? 0;
+  const page = Math.max(1, f.page ?? 1);
+  const rows = db.select().from(transactions).where(where)
+    .orderBy(desc(transactions.date), desc(transactions.id)).limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE).all();
+  return { rows, total };
+}
+
+export function recategorize(db: DB, txnId: string, categoryId: number, applyToMerchant: boolean): number {
+  const t = db.select().from(transactions).where(eq(transactions.id, txnId)).get();
+  if (!t) throw new Error("Transaction not found");
+  const isTransfer = categoryId === categoryMaps(db).idByName.Transfer ? 1 : 0;
+  if (!applyToMerchant) {
+    db.update(transactions).set({ categoryId, isTransfer }).where(eq(transactions.id, txnId)).run();
+    return 1;
+  }
+  const pattern = normalizeMerchant(t.merchant);
+  db.delete(categoryRules).where(eq(categoryRules.pattern, pattern)).run();
+  db.insert(categoryRules).values({ pattern, categoryId }).run();
+  let n = 0;
+  for (const r of db.select().from(transactions).all()) {
+    if (normalizeMerchant(r.merchant).includes(pattern)) {
+      db.update(transactions).set({ categoryId, isTransfer }).where(eq(transactions.id, r.id)).run();
+      n++;
+    }
+  }
+  return n;
 }
